@@ -1,0 +1,30 @@
+[project]
+name = "talentmatch"
+version = "0.1.0"
+description = "Bidirectional Resume-JD matching platform with RAG + agentic evaluation"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "beanie>=1.26,<2.0",
+    "motor>=3.7.0",
+    "qdrant-client>=1.13.0",
+    "litellm>=1.60.0",
+    "sentence-transformers>=3.4.0",
+    "pypdf>=5.3.0",
+    "python-docx>=1.1.2",
+    "python-multipart>=0.0.20",
+    "prometheus-client>=0.21.0",
+    "gradio>=5.0.0",
+    "httpx>=0.28.0",
+]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
