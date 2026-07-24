@@ -29,6 +29,7 @@ services:
     environment:
       MONGODB_URI: mongodb://mongo:27017/talentmatch
       QDRANT_URL: http://qdrant:6333
+      QDRANT_MODE: remote
     depends_on:
       mongo:
         condition: service_healthy

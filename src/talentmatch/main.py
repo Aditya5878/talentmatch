@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _wait_for_mongodb()
 
     qdrant = get_qdrant_client()
-    await ensure_collections(qdrant)
+    ensure_collections(qdrant)
 
     if "/" not in settings.embedding_model:
         from sentence_transformers import SentenceTransformer

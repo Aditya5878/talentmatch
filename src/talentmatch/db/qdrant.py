@@ -6,15 +6,16 @@ from talentmatch.config import settings
 
 
 def get_qdrant_client() -> QdrantClient:
+    if settings.qdrant_mode == "local":
+        return QdrantClient(path="./qdrant_data")
     return QdrantClient(url=settings.qdrant_url)
 
 
-async def ensure_collections(client: QdrantClient) -> None:
-    collections = [
-        (settings.qdrant_collection_candidate, "candidate_chunks"),
-        (settings.qdrant_collection_jd, "jd_chunks"),
-    ]
-    for collection_name, _ in collections:
+def ensure_collections(client: QdrantClient) -> None:
+    for collection_name in [
+        settings.qdrant_collection_candidate,
+        settings.qdrant_collection_jd,
+    ]:
         try:
             client.get_collection(collection_name)
         except (UnexpectedResponse, ValueError):

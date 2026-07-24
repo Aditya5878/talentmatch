@@ -5,7 +5,7 @@ COPY pyproject.toml README.md .
 RUN pip install --no-cache-dir gradio httpx
 
 COPY src/ src/
-COPY .env .env
 
+ENV PYTHONPATH=/app/src
 EXPOSE 7860
 CMD ["python", "-m", "talentmatch.ui.app"]
