@@ -3,7 +3,7 @@ from typing import Any
 
 from talentmatch.utils.llm import llm_completion
 
-MAX_INPUT_CHARS = 8000
+MAX_INPUT_CHARS = 6000
 
 RESUME_EXTRACTION_PROMPT = """You are a resume parser. Extract structured information from the following resume text.
 Return ONLY valid JSON with this schema:
@@ -68,7 +68,7 @@ async def _llm_parse(raw_text: str, system_prompt: str) -> dict[str, Any]:
     response = await llm_completion(
         messages=messages,
         temperature=0.1,
-        max_tokens=2048,
+        max_tokens=4096,
         response_format={"type": "json_object"},
     )
     content = response.choices[0].message.content
