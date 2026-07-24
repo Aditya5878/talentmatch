@@ -1,7 +1,11 @@
 import json
+import re
+import logging
 from typing import Any
 
 from talentmatch.utils.llm import llm_completion
+
+logger = logging.getLogger("talentmatch.parser")
 
 MAX_INPUT_CHARS = 6000
 
@@ -70,5 +74,25 @@ async def _llm_parse(raw_text: str, system_prompt: str) -> dict[str, Any]:
         temperature=0.1,
         max_tokens=4096,
     )
-    content = response.choices[0].message.content
-    return json.loads(content)
+    content = response.choices[0].message.content or ""
+    return _extract_json(content)
+
+
+def _extract_json(text: str) -> dict[str, Any]:
+    cleaned = text.strip()
+
+    match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", cleaned, re.DOTALL)
+    if match:
+        cleaned = match.group(1).strip()
+
+    if not cleaned:
+        raise ValueError("LLM returned empty response")
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        brace_start = cleaned.find("{")
+        brace_end = cleaned.rfind("}")
+        if brace_start != -1 and brace_end > brace_start:
+            return json.loads(cleaned[brace_start : brace_end + 1])
+        raise ValueError(f"No valid JSON found in LLM response: {cleaned[:200]}")
