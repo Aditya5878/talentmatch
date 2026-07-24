@@ -32,6 +32,26 @@ async def rerank(
     entities: list[dict],
     direction: MatchDirection = MatchDirection.jd_to_candidate,
 ) -> list[dict]:
+    """Rerank retrieved entities using LLM-based scoring.
+
+    Sends the query and candidate entities to the LLM with a structured
+    scoring prompt. Returns top 5 results with scores, rationale, highlights,
+    and matched/missing skills.
+
+    Falls back to raw vector similarity scores if the LLM call fails,
+    with rerank_skipped=True flag to indicate degraded results.
+
+    Args:
+        query_text: The original query (JD text, resume text, or search query).
+        entities: List of retrieved entities from Qdrant, each with
+                  'entity_id', 'score', and 'payload' keys.
+        direction: The match direction (jd_to_candidate, resume_to_jd, etc.).
+
+    Returns:
+        Top 5 reranked results, each with entity_id, score, rationale,
+        highlights, matched_skills, missing_skills, and optionally
+        rerank_skipped=True.
+    """
     if not entities:
         return []
 

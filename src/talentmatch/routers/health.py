@@ -8,10 +8,12 @@ HEALTH_COUNTER = Counter("health_checks_total", "Total health checks")
 
 @router.get("/health")
 async def health():
+    """Health check endpoint. Increments the health check counter."""
     HEALTH_COUNTER.inc()
     return {"status": "ok"}
 
 
 @router.get("/metrics")
 async def metrics():
+    """Prometheus metrics endpoint. Returns metrics in text/plain format."""
     return Response(content=generate_latest(), media_type="text/plain")

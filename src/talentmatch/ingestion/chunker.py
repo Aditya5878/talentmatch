@@ -2,6 +2,19 @@ from typing import Any
 
 
 def chunk_resume(parsed: dict[str, Any]) -> list[dict[str, str]]:
+    """Chunk a parsed resume into section-based text segments.
+
+    Creates separate chunks for skills (single chunk), experience entries
+    (one chunk per job), and education entries (one chunk per degree).
+    Section-based chunking retrieves better than fixed-length chunking
+    because each chunk represents a coherent semantic unit.
+
+    Args:
+        parsed: Parsed resume data from parse_resume().
+
+    Returns:
+        List of dicts with 'section' (str) and 'text' (str) keys.
+    """
     chunks: list[dict[str, str]] = []
 
     skills = parsed.get("skills", [])
@@ -28,6 +41,17 @@ def chunk_resume(parsed: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def chunk_jd(parsed: dict[str, Any]) -> list[dict[str, str]]:
+    """Chunk a parsed job description into section-based text segments.
+
+    Creates separate chunks for required skills, nice-to-have skills,
+    and individual responsibilities.
+
+    Args:
+        parsed: Parsed JD data from parse_jd().
+
+    Returns:
+        List of dicts with 'section' (str) and 'text' (str) keys.
+    """
     chunks: list[dict[str, str]] = []
 
     required = parsed.get("required_skills", [])

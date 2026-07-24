@@ -2,6 +2,24 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    """Application configuration loaded from environment variables and .env file.
+
+    Attributes:
+        groq_api_key: API key for Groq LLM provider.
+        tavily_api_key: API key for Tavily search provider.
+        llm_model: LiteLLM model identifier for chat completions.
+        mongodb_uri: MongoDB connection string.
+        qdrant_url: Qdrant server URL (used in remote mode).
+        qdrant_mode: Qdrant client mode — "local" (in-process) or "remote" (server).
+        embedding_model: Sentence-transformers model name or LiteLLM remote model ID.
+        embedding_batch_size: Number of texts per embedding API call.
+        embedding_dimension: Vector dimension for the embedding model.
+        qdrant_collection_candidate: Qdrant collection name for candidate chunks.
+        qdrant_collection_jd: Qdrant collection name for JD chunks.
+        host: API server bind host.
+        port: API server bind port.
+    """
+
     groq_api_key: str = ""
     tavily_api_key: str = ""
 

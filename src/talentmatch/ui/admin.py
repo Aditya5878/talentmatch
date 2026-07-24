@@ -8,6 +8,16 @@ API_BASE = os.getenv("API_BASE", "http://localhost:8000")
 
 
 def build_admin_tab() -> None:
+    """Build the Admin Data Ingestion tab for the Gradio UI.
+
+    Creates a tab with:
+    - Multi-file upload (PDF/DOCX/TXT) with resume/JD type selector
+    - Upload & Ingest button that calls POST /ingest/batch
+    - Batch status display with refresh button
+    - Document browser to view ingested candidates/JDs and their parsed JSON
+
+    All API calls go through httpx to the FastAPI backend.
+    """
     with gr.Tab("Admin - Data Ingestion"):
         gr.Markdown("## Data Ingestion")
 

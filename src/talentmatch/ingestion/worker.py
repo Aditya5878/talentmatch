@@ -22,6 +22,20 @@ logger = logging.getLogger("talentmatch.worker")
 
 
 async def process_batch(batch: BatchJob, files: list[tuple[str, bytes, str]]) -> None:
+    """Process a batch of files through the full ingestion pipeline.
+
+    For each file: extract text → LLM parse → chunk → embed → collect for bulk write.
+    After all files are processed, bulk-writes to MongoDB (insert_many) and
+    Qdrant (upsert) in single calls. Handles per-file failure isolation —
+    one failed file doesn't block the rest.
+
+    Idempotency: before inserting, checks for existing records with the same
+    file hash and deletes them (delete-old + insert-new pattern).
+
+    Args:
+        batch: The BatchJob document to update with progress/status.
+        files: List of (filename, file_bytes, file_type) tuples.
+    """
     batch.status = BatchStatus.processing
     batch.updated_at = datetime.utcnow()
     await batch.save()
@@ -87,6 +101,15 @@ async def process_batch(batch: BatchJob, files: list[tuple[str, bytes, str]]) ->
 
 
 def _make_item(filename: str, file_type: str) -> BatchItem:
+    """Create a new BatchItem with queued status.
+
+    Args:
+        filename: Name of the file.
+        file_type: Entity type string ("candidate" or "jd").
+
+    Returns:
+        A BatchItem instance with default queued status.
+    """
     return BatchItem(
         filename=filename,
         file_type=EntityType(file_type),
@@ -106,6 +129,27 @@ async def _process_file(
     all_jds: list[JD],
     qdrant: QdrantClient,
 ) -> None:
+    """Process a single file through extract → parse → chunk → embed.
+
+    Appends results to the shared collection lists for later bulk write.
+    Handles idempotency by cleaning up any existing records with the
+    same file hash before inserting new ones.
+
+    Args:
+        filename: Original filename.
+        file_bytes: Raw file content.
+        file_type: Whether this is a candidate resume or JD.
+        item: BatchItem to update with processing status.
+        candidate_points: Shared list to append Qdrant points for candidates.
+        jd_points: Shared list to append Qdrant points for JDs.
+        all_embeddings_index: Shared list to append EmbeddingIndex records.
+        all_candidates: Shared list to append Candidate documents.
+        all_jds: Shared list to append JD documents.
+        qdrant: The shared Qdrant client instance.
+
+    Raises:
+        Exception: On extraction, parsing, or embedding failure.
+    """
     file_hash = compute_file_hash(file_bytes)
     item.file_hash = file_hash
 
@@ -196,6 +240,17 @@ async def _process_file(
 
 
 async def _cleanup_existing(qdrant: QdrantClient, file_type: EntityType, file_hash: str) -> None:
+    """Delete existing records with the same file hash for idempotent re-ingestion.
+
+    Finds and removes: Qdrant vector points, EmbeddingIndex records,
+    and the Candidate/JD document for any previously ingested file
+    with the same content hash.
+
+    Args:
+        qdrant: The shared Qdrant client.
+        file_type: Whether to clean up candidate or JD records.
+        file_hash: SHA-256 hash of the file bytes to match against.
+    """
     collection = settings.qdrant_collection_candidate if file_type == EntityType.candidate else settings.qdrant_collection_jd
     model = Candidate if file_type == EntityType.candidate else JD
 

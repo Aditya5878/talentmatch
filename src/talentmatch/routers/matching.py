@@ -12,6 +12,18 @@ router = APIRouter(prefix="/match", tags=["matching"])
 
 
 class MatchRequest(BaseModel):
+    """Request model for matching endpoints.
+
+    Provide either entity_id (to match against an ingested document)
+    or entity_text (to match against raw text).
+
+    Attributes:
+        entity_id: MongoDB document ID of a JD or Candidate.
+        entity_text: Raw text to match against (no persistence lookup).
+        top_k: Number of top results to return (default 5).
+        notify: Whether to send notification emails (not yet implemented).
+    """
+
     entity_id: Optional[str] = None
     entity_text: Optional[str] = None
     top_k: int = 5
@@ -19,11 +31,29 @@ class MatchRequest(BaseModel):
 
 
 class MatchResponse(BaseModel):
+    """Response model containing reranked match results."""
+
     matches: list[dict]
 
 
 @router.post("/jd-to-candidates")
 async def jd_to_candidates(req: MatchRequest):
+    """Find and rank the top candidates for a given job description.
+
+    Extracts skills and responsibilities from the JD (or uses raw text),
+    retrieves matching candidates from Qdrant, reranks with LLM scoring,
+    and persists matches to MongoDB.
+
+    Args:
+        req: MatchRequest with jd_id or jd_text.
+
+    Returns:
+        MatchResponse with top 5 reranked candidate matches.
+
+    Raises:
+        HTTPException: 400 if neither entity_id nor entity_text provided.
+        HTTPException: 404 if entity_id references a non-existent JD.
+    """
     if req.entity_id:
         jd = await JD.get(req.entity_id)
         if not jd:
@@ -70,6 +100,22 @@ async def jd_to_candidates(req: MatchRequest):
 
 @router.post("/resume-to-jds")
 async def resume_to_jds(req: MatchRequest):
+    """Find and rank the best-matching job descriptions for a given resume.
+
+    Extracts skills and experience from the resume (or uses raw text),
+    retrieves matching JDs from Qdrant, reranks with LLM scoring,
+    and persists matches to MongoDB.
+
+    Args:
+        req: MatchRequest with candidate_id or resume_text.
+
+    Returns:
+        MatchResponse with top 5 reranked JD matches.
+
+    Raises:
+        HTTPException: 400 if neither entity_id nor entity_text provided.
+        HTTPException: 404 if entity_id references a non-existent candidate.
+    """
     if req.entity_id:
         candidate = await Candidate.get(req.entity_id)
         if not candidate:

@@ -14,6 +14,8 @@ _active_tasks: dict[str, asyncio.Task] = {}
 
 
 class BatchStatusResponse(BaseModel):
+    """Response model for batch ingestion status."""
+
     batch_id: str
     status: str
     total_items: int
@@ -22,6 +24,8 @@ class BatchStatusResponse(BaseModel):
 
 
 class IngestFileInfo(BaseModel):
+    """Per-file ingestion status info."""
+
     filename: str
     file_type: EntityType
     status: str = "queued"
@@ -32,6 +36,22 @@ async def ingest_batch(
     resumes: list[UploadFile] = [],
     jds: list[UploadFile] = [],
 ):
+    """Accept multiple resume and/or JD files and start async batch ingestion.
+
+    Creates a BatchJob document, spawns a background task to process all files
+    through extract → parse → chunk → embed → persist. Returns the batch_id
+    immediately for status polling.
+
+    Args:
+        resumes: List of resume files (PDF, DOCX, TXT).
+        jds: List of JD files (PDF, DOCX, TXT).
+
+    Returns:
+        {"batch_id": str, "total_files": int}
+
+    Raises:
+        HTTPException: 400 if no files provided.
+    """
     files: list[tuple[str, bytes, str]] = []
 
     for f in resumes:
@@ -71,6 +91,17 @@ async def ingest_batch(
 
 @router.get("/batch/{batch_id}/status")
 async def batch_status(batch_id: str):
+    """Get the current status and per-item progress of a batch ingestion job.
+
+    Args:
+        batch_id: The BatchJob document ID.
+
+    Returns:
+        BatchStatusResponse with overall status and per-file details.
+
+    Raises:
+        HTTPException: 404 if batch not found.
+    """
     batch = await BatchJob.get(batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")

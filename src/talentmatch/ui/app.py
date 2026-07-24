@@ -4,6 +4,14 @@ from talentmatch.ui.admin import build_admin_tab
 
 
 def create_ui() -> gr.Blocks:
+    """Create the Gradio UI application with tabbed layout.
+
+    Builds a Blocks-based UI with tabs for admin ingestion,
+    recruiter matching, and candidate matching.
+
+    Returns:
+        The configured Gradio Blocks application.
+    """
     with gr.Blocks(
         title="TalentMatch AI",
         theme=gr.themes.Soft(),

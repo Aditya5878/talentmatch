@@ -16,6 +16,15 @@ logger = logging.getLogger("talentmatch")
 
 
 async def _wait_for_mongodb(retries: int = 10, delay: int = 3) -> None:
+    """Retry MongoDB connection with exponential delay.
+
+    Args:
+        retries: Maximum number of connection attempts.
+        delay: Seconds to wait between attempts.
+
+    Raises:
+        Exception: If all retry attempts fail.
+    """
     for attempt in range(retries):
         try:
             await init_mongodb()
@@ -28,6 +37,13 @@ async def _wait_for_mongodb(retries: int = 10, delay: int = 3) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """FastAPI lifespan handler — initializes all services on startup.
+
+    - Sets up structured logging
+    - Connects to MongoDB with retries
+    - Creates Qdrant collections if needed
+    - Loads local sentence-transformers model (if not using remote embeddings)
+    """
     setup_logging()
     logger.info("Starting TalentMatch API")
 
@@ -65,6 +81,7 @@ app.include_router(search.router)
 
 @app.get("/candidates")
 async def list_candidates():
+    """List all ingested candidates with id, name, email, and created_at."""
     docs = await Candidate.find_all().to_list()
     return [
         {"id": str(d.id), "name": d.name, "email": d.email, "created_at": d.created_at.isoformat()}
@@ -74,6 +91,7 @@ async def list_candidates():
 
 @app.get("/candidates/{candidate_id}")
 async def get_candidate(candidate_id: str):
+    """Get a full candidate document by ID, including parsed_json."""
     doc = await Candidate.get(candidate_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Candidate not found")
@@ -82,6 +100,7 @@ async def get_candidate(candidate_id: str):
 
 @app.get("/jds")
 async def list_jds():
+    """List all ingested job descriptions with id, title, company, and created_at."""
     docs = await JD.find_all().to_list()
     return [
         {"id": str(d.id), "title": d.title, "company": d.company, "created_at": d.created_at.isoformat()}
@@ -91,6 +110,7 @@ async def list_jds():
 
 @app.get("/jds/{jd_id}")
 async def get_jd(jd_id: str):
+    """Get a full JD document by ID, including parsed_json."""
     doc = await JD.get(jd_id)
     if not doc:
         raise HTTPException(status_code=404, detail="JD not found")
