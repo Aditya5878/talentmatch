@@ -69,7 +69,6 @@ async def _llm_parse(raw_text: str, system_prompt: str) -> dict[str, Any]:
         messages=messages,
         temperature=0.1,
         max_tokens=4096,
-        response_format={"type": "json_object"},
     )
     content = response.choices[0].message.content
     return json.loads(content)
