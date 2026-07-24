@@ -1,7 +1,6 @@
 import logging
 import uuid
 from contextvars import ContextVar
-from typing import Optional
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -14,6 +13,13 @@ def get_trace_id() -> str:
     return trace_id_var.get()
 
 
+class _TraceFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "trace_id") or not record.trace_id:
+            record.trace_id = trace_id_var.get() or "-"
+        return True
+
+
 def setup_logging() -> None:
     handler = logging.StreamHandler()
     handler.setFormatter(
@@ -22,10 +28,12 @@ def setup_logging() -> None:
             datefmt="%Y-%m-%dT%H:%M:%S",
         )
     )
+    handler.addFilter(_TraceFilter())
 
     root = logging.getLogger("talentmatch")
     root.setLevel(logging.INFO)
     root.addHandler(handler)
+    root.addFilter(_TraceFilter())
 
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         logging.getLogger(name).setLevel(logging.WARNING)
