@@ -50,6 +50,21 @@ async def jd_to_candidates(req: MatchRequest):
         direction=MatchDirection.jd_to_candidate,
     )
 
+    if req.entity_id:
+        for item in reranked:
+            match = Match(
+                jd_id=req.entity_id,
+                candidate_id=item.get("entity_id"),
+                query_text=query_text[:500],
+                score=item.get("score", 0),
+                rationale=item.get("rationale", ""),
+                highlights=item.get("highlights", []),
+                matched_skills=item.get("matched_skills", []),
+                missing_skills=item.get("missing_skills", []),
+                direction=MatchDirection.jd_to_candidate,
+            )
+            await match.insert()
+
     return MatchResponse(matches=reranked)
 
 
@@ -84,5 +99,20 @@ async def resume_to_jds(req: MatchRequest):
         entities=results,
         direction=MatchDirection.resume_to_jd,
     )
+
+    if req.entity_id:
+        for item in reranked:
+            match = Match(
+                candidate_id=req.entity_id,
+                jd_id=item.get("entity_id"),
+                query_text=query_text[:500],
+                score=item.get("score", 0),
+                rationale=item.get("rationale", ""),
+                highlights=item.get("highlights", []),
+                matched_skills=item.get("matched_skills", []),
+                missing_skills=item.get("missing_skills", []),
+                direction=MatchDirection.resume_to_jd,
+            )
+            await match.insert()
 
     return MatchResponse(matches=reranked)

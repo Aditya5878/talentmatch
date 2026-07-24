@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -9,6 +10,9 @@ from talentmatch.db.mongo import init_mongodb
 from talentmatch.db.qdrant import ensure_collections, get_qdrant_client
 from talentmatch.models import Candidate, JD
 from talentmatch.routers import health, ingestion, matching, search
+from talentmatch.utils.logging import TraceIDMiddleware, setup_logging
+
+logger = logging.getLogger("talentmatch")
 
 
 async def _wait_for_mongodb(retries: int = 10, delay: int = 3) -> None:
@@ -24,16 +28,22 @@ async def _wait_for_mongodb(retries: int = 10, delay: int = 3) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    setup_logging()
+    logger.info("Starting TalentMatch API")
+
     await _wait_for_mongodb()
+    logger.info("MongoDB connected")
 
     qdrant = get_qdrant_client()
     ensure_collections(qdrant)
+    logger.info("Qdrant collections ensured")
 
     if "/" not in settings.embedding_model:
         from sentence_transformers import SentenceTransformer
 
         model = SentenceTransformer(settings.embedding_model)
         app.state.embedding_model = model
+        logger.info("Local embedding model loaded: %s", settings.embedding_model)
 
     yield
 
@@ -44,6 +54,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+app.add_middleware(TraceIDMiddleware)
 
 app.include_router(health.router)
 app.include_router(ingestion.router)

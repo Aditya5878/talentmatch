@@ -1,13 +1,12 @@
 import json
 
 from fastapi import APIRouter
-from litellm import acompletion
 from pydantic import BaseModel
 
-from talentmatch.config import settings
 from talentmatch.matching.retriever import hybrid_search_candidates, hybrid_search_jds
 from talentmatch.matching.reranker import rerank
 from talentmatch.models.enums import MatchDirection
+from talentmatch.utils.llm import llm_completion
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -36,8 +35,7 @@ async def _expand_query(raw_query: str) -> list[str]:
         {"role": "system", "content": "Return only a JSON array of strings."},
         {"role": "user", "content": prompt},
     ]
-    response = await acompletion(
-        model=settings.llm_model,
+    response = await llm_completion(
         messages=messages,
         temperature=0.1,
     )
@@ -56,7 +54,7 @@ async def _expand_query(raw_query: str) -> list[str]:
 async def search_candidates(req: SearchRequest):
     expanded = await _expand_query(req.query_text)
     combined_query = " ".join([req.query_text] + expanded)
-    results = hybrid_search_candidates(query_text=combined_query, top_k=20)
+    results = await hybrid_search_candidates(query_text=combined_query, top_k=20)
 
     if not results:
         return SearchResponse(matches=[])
@@ -74,7 +72,7 @@ async def search_candidates(req: SearchRequest):
 async def search_jds(req: SearchRequest):
     expanded = await _expand_query(req.query_text)
     combined_query = " ".join([req.query_text] + expanded)
-    results = hybrid_search_jds(query_text=combined_query, top_k=20)
+    results = await hybrid_search_jds(query_text=combined_query, top_k=20)
 
     if not results:
         return SearchResponse(matches=[])

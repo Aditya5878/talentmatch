@@ -11,6 +11,7 @@ class Candidate(Document):
     resume_raw_text: str = ""
     resume_file_path: str = ""
     parsed_json: dict[str, Any] = Field(default_factory=dict)
+    file_hash: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     class Settings:

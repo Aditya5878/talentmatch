@@ -1,6 +1,5 @@
-from litellm import aembedding
-
 from talentmatch.config import settings
+from talentmatch.utils.llm import llm_embedding
 
 
 def _is_remote_model() -> bool:
@@ -37,7 +36,7 @@ async def _remote_embed(texts: list[str]) -> list[list[float]]:
     batch_size = settings.embedding_batch_size
     for i in range(0, len(texts), batch_size):
         batch = texts[i : i + batch_size]
-        response = await aembedding(model=settings.embedding_model, input=batch)
+        response = await llm_embedding(model=settings.embedding_model, input=batch)
         for item in response.data:
             results.append(item["embedding"])
     return results

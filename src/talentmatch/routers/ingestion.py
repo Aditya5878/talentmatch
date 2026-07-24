@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from talentmatch.ingestion.worker import process_batch
 from talentmatch.models import BatchJob
-from talentmatch.models.enums import EntityType
+from talentmatch.models.enums import BatchStatus, EntityType
 
 router = APIRouter(prefix="/ingest", tags=["ingestion"])
 
@@ -46,7 +46,7 @@ async def ingest_batch(
         raise HTTPException(status_code=400, detail="No files provided")
 
     batch = BatchJob(
-        status="queued",
+        status=BatchStatus.queued,
         total_items=len(files),
         completed_items=0,
         items=[

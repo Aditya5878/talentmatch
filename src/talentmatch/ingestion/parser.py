@@ -1,9 +1,7 @@
 import json
 from typing import Any
 
-from litellm import acompletion
-
-from talentmatch.config import settings
+from talentmatch.utils.llm import llm_completion
 
 RESUME_EXTRACTION_PROMPT = """You are a resume parser. Extract structured information from the following resume text.
 Return ONLY valid JSON with this schema:
@@ -60,8 +58,7 @@ async def _llm_parse(raw_text: str, system_prompt: str) -> dict[str, Any]:
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": raw_text},
     ]
-    response = await acompletion(
-        model=settings.llm_model,
+    response = await llm_completion(
         messages=messages,
         temperature=0.1,
         response_format={"type": "json_object"},

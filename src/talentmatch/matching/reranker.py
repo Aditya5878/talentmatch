@@ -1,9 +1,11 @@
 import json
+import logging
+from typing import Any
 
-from litellm import acompletion
-
-from talentmatch.config import settings
+from talentmatch.utils.llm import llm_completion
 from talentmatch.models.enums import MatchDirection
+
+logger = logging.getLogger("talentmatch.reranker")
 
 RERANK_PROMPT = """You are a hiring match evaluator. Given a job requirement and a set of candidates (or a resume and a set of jobs), score each match from 0-100.
 
@@ -52,22 +54,38 @@ async def rerank(
         {"role": "user", "content": prompt},
     ]
 
-    response = await acompletion(
-        model=settings.llm_model,
-        messages=messages,
-        temperature=0.1,
-    )
+    try:
+        response = await llm_completion(
+            messages=messages,
+            temperature=0.1,
+        )
 
-    content = response.choices[0].message.content
-    cleaned = content.strip()
-    if cleaned.startswith("```json"):
-        cleaned = cleaned[7:]
-    if cleaned.startswith("```"):
-        cleaned = cleaned[3:]
-    if cleaned.endswith("```"):
-        cleaned = cleaned[:-3]
+        content = response.choices[0].message.content
+        cleaned = content.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
 
-    scored = json.loads(cleaned)
+        scored = json.loads(cleaned)
+        scored.sort(key=lambda x: x.get("score", 0), reverse=True)
+        return scored[:5]
 
-    scored.sort(key=lambda x: x.get("score", 0), reverse=True)
-    return scored[:5]
+    except Exception as exc:
+        logger.warning("LLM rerank failed, falling back to similarity scores: %s", exc)
+        fallback = [
+            {
+                "entity_id": e["entity_id"],
+                "score": round(e.get("score", 0) * 100),
+                "matched_skills": [],
+                "missing_skills": [],
+                "highlights": [],
+                "rationale": "Reranking skipped due to LLM error; score is raw vector similarity.",
+                "rerank_skipped": True,
+            }
+            for e in entities
+        ]
+        fallback.sort(key=lambda x: x.get("score", 0), reverse=True)
+        return fallback[:5]

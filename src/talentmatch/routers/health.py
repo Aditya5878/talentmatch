@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 from prometheus_client import Counter, generate_latest
 
 router = APIRouter(tags=["health"])
@@ -14,4 +14,4 @@ async def health():
 
 @router.get("/metrics")
 async def metrics():
-    return generate_latest()
+    return Response(content=generate_latest(), media_type="text/plain")
