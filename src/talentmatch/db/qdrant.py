@@ -4,11 +4,18 @@ from qdrant_client.models import Distance, VectorParams
 
 from talentmatch.config import settings
 
+_client: QdrantClient | None = None
+
 
 def get_qdrant_client() -> QdrantClient:
+    global _client
+    if _client is not None:
+        return _client
     if settings.qdrant_mode == "local":
-        return QdrantClient(path="./qdrant_data")
-    return QdrantClient(url=settings.qdrant_url)
+        _client = QdrantClient(path="./qdrant_data")
+    else:
+        _client = QdrantClient(url=settings.qdrant_url)
+    return _client
 
 
 def ensure_collections(client: QdrantClient) -> None:
