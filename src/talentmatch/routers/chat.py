@@ -29,7 +29,7 @@ from talentmatch.agents.state import (
     ResumeToJDsState,
 )
 from talentmatch.models import Session, SessionMessage, SessionResult
-from talentmatch.models.enums import IntentType, ResultStatus, SessionMode
+from talentmatch.models.enums import IntentType, MatchDirection, ResultStatus, SessionMode
 from talentmatch.utils.logging import get_trace_id
 
 logger = logging.getLogger("talentmatch.routers.chat")
@@ -424,8 +424,6 @@ async def _handle_new_search_candidate(
     Determines if the message is a resume (resume-to-JDs) or free-text query,
     invokes the appropriate graph, and stores results for follow-up.
     """
-    from talentmatch.models.enums import MatchDirection
-
     entity_text = classified.entity_text or req.message
 
     # Heuristic: if the text looks like a resume (long, has experience/education), use resume graph
