@@ -9,6 +9,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from talentmatch.models.enums import MatchDirection
+
 
 class MatchResult(BaseModel):
     """A single reranked match result flowing through graph state."""
@@ -71,6 +73,15 @@ class BaseGraphState(BaseModel):
     # Graph execution tracking
     completed_steps: list[str] = Field(default_factory=list)
 
+    # Match direction (set by parse nodes, read by rerank/persist nodes)
+    match_direction: MatchDirection = MatchDirection.jd_to_candidate
+
+    # Free-text search fields (populated by expand_query node)
+    expanded_query_terms: list[str] = Field(default_factory=list)
+
+    # Which collection to search: "candidate" or "jd"
+    search_direction: Literal["candidate", "jd"] = "candidate"
+
 
 class JDToCandidatesState(BaseGraphState):
     """State for the JD→Candidates graph (Case A).
@@ -85,6 +96,18 @@ class ResumeToJDsState(BaseGraphState):
     """State for the Resume→JDs graph (Case B).
 
     Flow: parse_resume → retrieve_jds → rerank_score → persist_matches → notify_candidate
+    """
+
+    pass
+
+
+class FreeTextSearchState(BaseGraphState):
+    """State for the free-text search graph (no document upload).
+
+    Flow: expand_query → hybrid_retrieve → rerank_score → persist_matches
+
+    Used for keyword/skill searches like "Java developers" or
+    "Python backend openings" — no resume or JD needed as input.
     """
 
     pass

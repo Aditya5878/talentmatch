@@ -1,8 +1,8 @@
 """LangGraph graph definitions for matching workflows.
 
-Defines the JD→Candidates graph (Case A) and Resume→JDs graph (Case B) as
-compiled LangGraph StateGraphs. Each graph chains nodes sequentially with
-conditional branching for optional notification steps.
+Defines the JD→Candidates graph (Case A), Resume→JDs graph (Case B),
+and Free-Text Search graph as compiled LangGraph StateGraphs. Each graph
+chains nodes sequentially with conditional branching for error handling.
 """
 
 import logging
@@ -10,6 +10,8 @@ import logging
 from langgraph.graph import END, StateGraph
 
 from talentmatch.agents.nodes import (
+    expand_query_node,
+    hybrid_retrieve_node,
     notify_candidate_node,
     notify_candidates_node,
     parse_jd_node,
@@ -19,13 +21,18 @@ from talentmatch.agents.nodes import (
     retrieve_candidates_node,
     retrieve_jds_node,
 )
-from talentmatch.agents.state import JDToCandidatesState, ResumeToJDsState
+from talentmatch.agents.state import (
+    BaseGraphState,
+    FreeTextSearchState,
+    JDToCandidatesState,
+    ResumeToJDsState,
+)
 from talentmatch.utils.logging import get_trace_id
 
 logger = logging.getLogger("talentmatch.agents.graphs")
 
 
-def _check_error(state: JDToCandidatesState | ResumeToJDsState) -> str:
+def _check_error(state: BaseGraphState) -> str:
     """Branching function: route to END if error occurred, else continue.
 
     Args:
@@ -150,6 +157,50 @@ def build_resume_to_jds_graph() -> StateGraph:
     return graph.compile()
 
 
+def build_free_text_search_graph() -> StateGraph:
+    """Build the Free-Text Search graph (Spec 7.4).
+
+    Nodes: expand_query → hybrid_retrieve → rerank_score → persist_matches
+
+    No parse step — the raw query is expanded by the LLM, then used for
+    hybrid retrieval against either the candidate or JD collection.
+
+    Returns:
+        Compiled StateGraph ready for invocation.
+    """
+    graph = StateGraph(FreeTextSearchState)
+
+    # Add nodes
+    graph.add_node("expand_query", expand_query_node)
+    graph.add_node("hybrid_retrieve", hybrid_retrieve_node)
+    graph.add_node("rerank_score", rerank_score_node)
+    graph.add_node("persist_matches", persist_matches_node)
+
+    # Set entry point
+    graph.set_entry_point("expand_query")
+
+    # Add edges with conditional branching
+    graph.add_conditional_edges(
+        "expand_query",
+        _check_error,
+        {"continue": "hybrid_retrieve", "end": END},
+    )
+    graph.add_conditional_edges(
+        "hybrid_retrieve",
+        _check_error,
+        {"continue": "rerank_score", "end": END},
+    )
+    graph.add_conditional_edges(
+        "rerank_score",
+        _check_error,
+        {"continue": "persist_matches", "end": END},
+    )
+    graph.add_edge("persist_matches", END)
+
+    return graph.compile()
+
+
 # Compiled graph singletons (created once at import time)
 jd_to_candidates_graph = build_jd_to_candidates_graph()
 resume_to_jds_graph = build_resume_to_jds_graph()
+free_text_search_graph = build_free_text_search_graph()
