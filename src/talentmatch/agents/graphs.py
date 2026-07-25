@@ -10,8 +10,11 @@ import logging
 from langgraph.graph import END, StateGraph
 
 from talentmatch.agents.nodes import (
+    diff_skills_node,
     expand_query_node,
+    format_suggestions_node,
     hybrid_retrieve_node,
+    llm_suggest_edits_node,
     notify_candidate_node,
     notify_candidates_node,
     parse_jd_node,
@@ -112,8 +115,11 @@ def build_jd_to_candidates_graph() -> StateGraph:
 def build_resume_to_jds_graph() -> StateGraph:
     """Build the Resume→JDs graph (Case B).
 
-    Nodes: parse_resume → retrieve_jds → rerank_score → persist_matches → notify_candidate
+    Nodes: parse_resume → retrieve_jds → rerank_score → diff_skills →
+           llm_suggest_edits → format_suggestions → persist_matches → notify_candidate
 
+    The gap suggestion sub-graph (diff_skills → llm_suggest_edits → format_suggestions)
+    generates concrete resume improvement suggestions per top-matched JD.
     The notify_candidate node always runs (default email-on-match in Case B).
 
     Returns:
@@ -125,6 +131,9 @@ def build_resume_to_jds_graph() -> StateGraph:
     graph.add_node("parse_resume", parse_resume_node)
     graph.add_node("retrieve_jds", retrieve_jds_node)
     graph.add_node("rerank_score", rerank_score_node)
+    graph.add_node("diff_skills", diff_skills_node)
+    graph.add_node("llm_suggest_edits", llm_suggest_edits_node)
+    graph.add_node("format_suggestions", format_suggestions_node)
     graph.add_node("persist_matches", persist_matches_node)
     graph.add_node("notify_candidate", notify_candidate_node)
 
@@ -144,6 +153,21 @@ def build_resume_to_jds_graph() -> StateGraph:
     )
     graph.add_conditional_edges(
         "rerank_score",
+        _check_error,
+        {"continue": "diff_skills", "end": END},
+    )
+    graph.add_conditional_edges(
+        "diff_skills",
+        _check_error,
+        {"continue": "llm_suggest_edits", "end": END},
+    )
+    graph.add_conditional_edges(
+        "llm_suggest_edits",
+        _check_error,
+        {"continue": "format_suggestions", "end": END},
+    )
+    graph.add_conditional_edges(
+        "format_suggestions",
         _check_error,
         {"continue": "persist_matches", "end": END},
     )

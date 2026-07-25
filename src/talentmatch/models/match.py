@@ -17,6 +17,7 @@ class Match(Document):
     highlights: list[str] = Field(default_factory=list)
     matched_skills: list[str] = Field(default_factory=list)
     missing_skills: list[str] = Field(default_factory=list)
+    gap_suggestions: list[dict] = Field(default_factory=list)
     direction: MatchDirection = MatchDirection.jd_to_candidate
     created_at: datetime = Field(default_factory=datetime.utcnow)
 

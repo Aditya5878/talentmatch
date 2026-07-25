@@ -79,6 +79,9 @@ class BaseGraphState(BaseModel):
     # Free-text search fields (populated by expand_query node)
     expanded_query_terms: list[str] = Field(default_factory=list)
 
+    # Gap suggestion output (populated by gap_suggestion sub-graph, Case B only)
+    gap_suggestions: list[dict] = Field(default_factory=list)
+
     # Which collection to search: "candidate" or "jd"
     search_direction: Literal["candidate", "jd"] = "candidate"
 

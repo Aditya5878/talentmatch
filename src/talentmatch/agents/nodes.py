@@ -33,6 +33,25 @@ from talentmatch.utils.logging import get_trace_id
 logger = logging.getLogger("talentmatch.agents.nodes")
 
 
+GAP_SUGGESTION_PROMPT = """You are a resume improvement advisor. Given a candidate's current resume text, their skills, and the required skills from a job description, provide concrete, actionable suggestions to improve the candidate's resume to better match this specific job.
+
+Job Title: {jd_title}
+Company: {jd_company}
+Required Skills: {required_skills}
+
+Candidate's Current Skills: {candidate_skills}
+
+Candidate Resume:
+{resume_text}
+
+Provide 2-4 specific, actionable suggestions. Each suggestion should be:
+- Concrete (not generic advice like "improve your resume")
+- Actionable (the candidate can implement it immediately)
+- Relevant to this specific job's requirements
+
+Return ONLY a JSON array of strings, e.g. ["Add a project section highlighting Spring Boot experience", "Include AWS certification in your education section"]."""
+
+
 async def parse_jd_node(state: JDToCandidatesState) -> dict:
     """Parse a JD document and extract query fields for retrieval.
 
@@ -232,6 +251,14 @@ async def persist_matches_node(state: BaseGraphState) -> dict:
 
     match_ids = []
     for item in state.reranked_results:
+        # Find matching gap suggestions for this entity (Case B only)
+        entity_gap_suggestions = []
+        if state.gap_suggestions:
+            for gs in state.gap_suggestions:
+                if gs.get("jd_id") == item.entity_id:
+                    entity_gap_suggestions = gs.get("suggestions", [])
+                    break
+
         if state.match_direction == MatchDirection.jd_to_candidate:
             match = Match(
                 jd_id=state.entity_id,
@@ -242,6 +269,7 @@ async def persist_matches_node(state: BaseGraphState) -> dict:
                 highlights=item.highlights,
                 matched_skills=item.matched_skills,
                 missing_skills=item.missing_skills,
+                gap_suggestions=entity_gap_suggestions,
                 direction=state.match_direction,
             )
         elif state.match_direction == MatchDirection.resume_to_jd:
@@ -254,6 +282,7 @@ async def persist_matches_node(state: BaseGraphState) -> dict:
                 highlights=item.highlights,
                 matched_skills=item.matched_skills,
                 missing_skills=item.missing_skills,
+                gap_suggestions=entity_gap_suggestions,
                 direction=state.match_direction,
             )
         else:
@@ -264,6 +293,7 @@ async def persist_matches_node(state: BaseGraphState) -> dict:
                 highlights=item.highlights,
                 matched_skills=item.matched_skills,
                 missing_skills=item.missing_skills,
+                gap_suggestions=entity_gap_suggestions,
                 direction=state.match_direction,
             )
         await match.insert()
@@ -466,4 +496,167 @@ async def hybrid_retrieve_node(state: FreeTextSearchState) -> dict:
     return {
         "retrieved_entities": results,
         "completed_steps": state.completed_steps + ["hybrid_retrieve"],
+    }
+
+
+async def diff_skills_node(state: ResumeToJDsState) -> dict:
+    """Compare resume skills against top matched JD required skills (Case B, sub-graph step 1).
+
+    Loads each top-matched JD from MongoDB, extracts required_skills, and
+    builds a per-JD gap analysis dict. This diff is consumed by the
+    llm_suggest_edits_node to generate concrete improvement suggestions.
+
+    Args:
+        state: Current graph state with reranked_results and parsed_json (resume skills).
+
+    Returns:
+        State update dict with gap_suggestions (list of per-JD diff dicts).
+    """
+    if state.error or not state.reranked_results:
+        return {}
+
+    candidate_skills = state.parsed_json.get("skills", [])
+    top_jds = state.reranked_results[:3]
+
+    jd_diffs = []
+    for match_result in top_jds:
+        jd = await JD.get(match_result.entity_id)
+        if not jd or not jd.parsed_json:
+            continue
+
+        required_skills = jd.parsed_json.get("required_skills", [])
+        matched = [s for s in candidate_skills if s in required_skills]
+        missing = [s for s in required_skills if s not in candidate_skills]
+
+        jd_diffs.append({
+            "jd_id": match_result.entity_id,
+            "jd_title": jd.title,
+            "jd_company": jd.company,
+            "required_skills": required_skills,
+            "matched_skills": matched,
+            "missing_skills": missing,
+            "match_score": match_result.score,
+        })
+
+    logger.info(
+        "diff_skills_node: %d JD diffs computed",
+        len(jd_diffs),
+        extra={"trace_id": get_trace_id()},
+    )
+
+    return {
+        "gap_suggestions": jd_diffs,
+        "completed_steps": state.completed_steps + ["diff_skills"],
+    }
+
+
+async def llm_suggest_edits_node(state: ResumeToJDsState) -> dict:
+    """Generate concrete resume improvement suggestions using the LLM (Case B, sub-graph step 2).
+
+    For each top-matched JD, calls the LLM with the resume text + skill gap
+    to produce 2-4 actionable suggestions. Falls back to generic suggestions
+    if the LLM call fails.
+
+    Args:
+        state: Current graph state with gap_suggestions, raw_text (resume), parsed_json.
+
+    Returns:
+        State update dict with gap_suggestions updated with 'suggestions' field per JD.
+    """
+    if state.error or not state.gap_suggestions:
+        return {}
+
+    candidate_skills = state.parsed_json.get("skills", [])
+    resume_text = state.raw_text
+
+    updated_suggestions = []
+    for jd_diff in state.gap_suggestions:
+        prompt = GAP_SUGGESTION_PROMPT.format(
+            jd_title=jd_diff["jd_title"],
+            jd_company=jd_diff["jd_company"],
+            required_skills=", ".join(jd_diff["required_skills"]),
+            candidate_skills=", ".join(candidate_skills),
+            resume_text=resume_text[:3000],
+        )
+        messages = [
+            {"role": "system", "content": "Return only a JSON array of strings."},
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            response = await llm_completion(messages=messages, temperature=0.2)
+            content = response.choices[0].message.content
+            cleaned = content.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned[7:]
+            elif cleaned.startswith("```"):
+                cleaned = cleaned[3:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            suggestions = json.loads(cleaned)
+            if not isinstance(suggestions, list):
+                suggestions = [str(suggestions)]
+        except Exception as exc:
+            logger.warning(
+                "llm_suggest_edits_node: LLM call failed for JD %s: %s",
+                jd_diff["jd_id"],
+                exc,
+                extra={"trace_id": get_trace_id()},
+            )
+            suggestions = [
+                f"Add or highlight experience with: {', '.join(jd_diff['missing_skills'][:3])}",
+                f"Include projects demonstrating {jd_diff['missing_skills'][0] if jd_diff['missing_skills'] else 'relevant skills'}",
+            ]
+
+        updated_suggestions.append({**jd_diff, "suggestions": suggestions})
+
+    logger.info(
+        "llm_suggest_edits_node: suggestions generated for %d JDs",
+        len(updated_suggestions),
+        extra={"trace_id": get_trace_id()},
+    )
+
+    return {
+        "gap_suggestions": updated_suggestions,
+        "completed_steps": state.completed_steps + ["llm_suggest_edits"],
+    }
+
+
+async def format_suggestions_node(state: ResumeToJDsState) -> dict:
+    """Format gap suggestions into a structured output (Case B, sub-graph step 3).
+
+    Structures the per-JD suggestions into a consistent format with
+    summary stats and actionable items. This is the final step of the
+    gap suggestion sub-graph before persist_matches.
+
+    Args:
+        state: Current graph state with gap_suggestions (populated by llm_suggest_edits_node).
+
+    Returns:
+        State update dict with gap_suggestions in final formatted structure.
+    """
+    if state.error or not state.gap_suggestions:
+        return {}
+
+    formatted = []
+    for jd_suggestion in state.gap_suggestions:
+        formatted.append({
+            "jd_id": jd_suggestion["jd_id"],
+            "jd_title": jd_suggestion["jd_title"],
+            "jd_company": jd_suggestion["jd_company"],
+            "match_score": jd_suggestion["match_score"],
+            "skills_matched": len(jd_suggestion.get("matched_skills", [])),
+            "skills_missing": len(jd_suggestion.get("missing_skills", [])),
+            "suggestions": jd_suggestion.get("suggestions", []),
+        })
+
+    logger.info(
+        "format_suggestions_node: %d JD suggestions formatted",
+        len(formatted),
+        extra={"trace_id": get_trace_id()},
+    )
+
+    return {
+        "gap_suggestions": formatted,
+        "completed_steps": state.completed_steps + ["format_suggestions"],
     }
