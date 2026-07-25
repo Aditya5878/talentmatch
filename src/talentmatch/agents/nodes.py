@@ -9,11 +9,14 @@ import json
 import logging
 
 from talentmatch.agents.state import (
+    ActionState,
     BaseGraphState,
+    ChatState,
     EmailLogEntry,
     FreeTextSearchState,
     JDToCandidatesState,
     MatchResult,
+    RefinementState,
     ResumeToJDsState,
 )
 from talentmatch.ingestion.parser import parse_jd, parse_resume
@@ -24,8 +27,8 @@ from talentmatch.matching.retriever import (
     retrieve_candidates,
     retrieve_jds,
 )
-from talentmatch.models import Candidate, JD, Match
-from talentmatch.models.enums import MatchDirection
+from talentmatch.models import Candidate, JD, Match, Session, SessionMessage, SessionResult
+from talentmatch.models.enums import IntentType, MatchDirection, ResultStatus
 from talentmatch.notification import send_notification
 from talentmatch.utils.llm import llm_completion
 from talentmatch.utils.logging import get_trace_id
@@ -660,3 +663,410 @@ async def format_suggestions_node(state: ResumeToJDsState) -> dict:
         "gap_suggestions": formatted,
         "completed_steps": state.completed_steps + ["format_suggestions"],
     }
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Intent Router Node (Spec 7.0)
+# ──────────────────────────────────────────────────────────────────────
+
+CLASSIFY_INTENT_PROMPT = """You are an intent classifier for a job-matching assistant. Given a user message, classify it into exactly one of these intents:
+
+- new_search: The user wants to search for candidates or jobs. They may provide a job description, resume text, or a skill query like "find Java developers".
+- refinement: The user wants to modify the current result set. Examples: "remove candidate 3", "only keep senior developers", "filter by Python skills".
+- action: The user wants to take an action on results. Examples: "email these candidates", "send me these openings", "email the top 3".
+- follow_on: The user is asking questions about existing results or gap suggestions. Examples: "why did you suggest this?", "tell me more about candidate 2", "what skills am I missing?".
+
+User message: {message}
+
+Return ONLY a JSON object: {{"intent": "<one of: new_search, refinement, action, follow_on>", "entity_text": "<extracted JD/resume text if new_search, else null>", "top_k": <number if specified, else 5>}}"""
+
+
+async def classify_intent_node(state: ChatState) -> dict:
+    """Classify the user's message into an intent category (Spec 7.0).
+
+    Uses the LLM to determine whether the message is a new search,
+    refinement, action, or follow-on question.
+
+    Args:
+        state: Current chat state with the user's message.
+
+    Returns:
+        State update dict with intent, entity_text, top_k.
+    """
+    prompt = CLASSIFY_INTENT_PROMPT.format(message=state.message)
+    messages = [
+        {"role": "system", "content": "Return only a JSON object with intent classification."},
+        {"role": "user", "content": prompt},
+    ]
+
+    try:
+        response = await llm_completion(messages=messages, temperature=0.0)
+        content = response.choices[0].message.content
+        cleaned = content.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        elif cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        parsed = json.loads(cleaned)
+        intent_str = parsed.get("intent", "new_search")
+        intent = IntentType(intent_str) if intent_str in IntentType.__members__.values() else IntentType.new_search
+        entity_text = parsed.get("entity_text")
+        top_k = parsed.get("top_k", 5)
+    except Exception as exc:
+        logger.warning(
+            "classify_intent_node: LLM classification failed, defaulting to new_search: %s",
+            exc,
+            extra={"trace_id": get_trace_id()},
+        )
+        intent = IntentType.new_search
+        entity_text = state.message
+        top_k = 5
+
+    logger.info(
+        "classify_intent_node: intent=%s, top_k=%d",
+        intent.value,
+        top_k,
+        extra={"trace_id": get_trace_id()},
+    )
+
+    return {
+        "intent": intent,
+        "entity_text": entity_text,
+        "top_k": top_k,
+        "completed_steps": state.completed_steps + ["classify_intent"],
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Refinement Nodes (Spec 7.5)
+# ──────────────────────────────────────────────────────────────────────
+
+RESOLVE_REFERENCE_PROMPT = """You are a reference resolver for a job-matching assistant. The user has a list of matched results and wants to filter or remove specific ones.
+
+Current results:
+{results_list}
+
+User message: {message}
+
+Determine which results the user is referring to. Return ONLY a JSON object:
+{{"target_ids": ["<result_id or entity_id>"], "action": "remove" or "keep", "filter_criteria": "<if fuzzy filter like '5+ years', describe it, else null>"}}
+
+For exact references like "candidate 3" or "the first one", map to the result index.
+For fuzzy filters like "only senior developers" or "remove the ones with low scores", identify the criteria."""
+
+
+async def resolve_reference_node(state: RefinementState) -> dict:
+    """Resolve user references to specific session result IDs (Spec 7.5 step 1).
+
+    Maps references like "candidate 3", "the senior ones" to specific
+    session_results rows. Exact index/name matches resolve directly;
+    fuzzy filters fall back to LLM classification.
+
+    Args:
+        state: Current refinement state with message and session_results.
+
+    Returns:
+        State update dict with resolved_targets and refinement_action.
+    """
+    if state.error or not state.session_results:
+        return {"error": "No active results to refine"}
+
+    results_list = "\n".join(
+        f"[{i+1}] ID: {r.entity_id}, Score: {r.score}, "
+        f"Highlights: {', '.join(r.highlights[:2])}, "
+        f"Skills: {', '.join(r.matched_skills[:3])}"
+        for i, r in enumerate(state.session_results)
+    )
+
+    prompt = RESOLVE_REFERENCE_PROMPT.format(
+        results_list=results_list,
+        message=state.message,
+    )
+    messages = [
+        {"role": "system", "content": "Return only a JSON object with target IDs and action."},
+        {"role": "user", "content": prompt},
+    ]
+
+    try:
+        response = await llm_completion(messages=messages, temperature=0.0)
+        content = response.choices[0].message.content
+        cleaned = content.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        elif cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        parsed = json.loads(cleaned)
+        target_ids = parsed.get("target_ids", [])
+        action = parsed.get("action", "remove")
+    except Exception as exc:
+        logger.warning(
+            "resolve_reference_node: LLM resolution failed: %s",
+            exc,
+            extra={"trace_id": get_trace_id()},
+        )
+        target_ids = []
+        action = "remove"
+
+    logger.info(
+        "resolve_reference_node: resolved %d targets, action=%s",
+        len(target_ids),
+        action,
+        extra={"trace_id": get_trace_id()},
+    )
+
+    return {
+        "resolved_targets": target_ids,
+        "refinement_action": action,
+        "completed_steps": state.completed_steps + ["resolve_reference"],
+    }
+
+
+async def apply_refinement_node(state: RefinementState) -> dict:
+    """Apply the refinement to session results (Spec 7.5 step 2).
+
+    Flips the status of targeted results to 'removed', or keeps only
+    the targeted results (if action is 'keep').
+
+    Args:
+        state: Current refinement state with resolved_targets and refinement_action.
+
+    Returns:
+        State update dict with updated session_results.
+    """
+    if state.error or not state.resolved_targets:
+        return {}
+
+    updated_results = []
+    for result in state.session_results:
+        if state.refinement_action == "remove":
+            if result.entity_id in state.resolved_targets or result.result_id in state.resolved_targets:
+                updated_results.append(
+                    result.model_copy(update={"status": "removed"})
+                )
+            else:
+                updated_results.append(result)
+        elif state.refinement_action == "keep":
+            if result.entity_id in state.resolved_targets or result.result_id in state.resolved_targets:
+                updated_results.append(result)
+            else:
+                updated_results.append(
+                    result.model_copy(update={"status": "removed"})
+                )
+        else:
+            updated_results.append(result)
+
+    active_count = sum(1 for r in updated_results if r.status == "active")
+    logger.info(
+        "apply_refinement_node: %d active results after refinement",
+        active_count,
+        extra={"trace_id": get_trace_id()},
+    )
+
+    return {
+        "session_results": updated_results,
+        "completed_steps": state.completed_steps + ["apply_refinement"],
+    }
+
+
+async def persist_session_results_node(state: RefinementState) -> dict:
+    """Persist refined session results to MongoDB (Spec 7.5 step 3).
+
+    Updates the status of session_results documents in the database
+    to reflect the refinement.
+
+    Args:
+        state: Current refinement state with updated session_results.
+
+    Returns:
+        State update dict with completed_steps.
+    """
+    if state.error or not state.session_results:
+        return {}
+
+    for result in state.session_results:
+        existing = await SessionResult.find_one(
+            SessionResult.session_id == state.session_id,
+            SessionResult.entity_id == result.entity_id,
+        )
+        if existing:
+            existing.status = ResultStatus(result.status)
+            existing.updated_at = __import__("datetime").datetime.utcnow()
+            await existing.save()
+
+    logger.info(
+        "persist_session_results_node: %d results persisted for session %s",
+        len(state.session_results),
+        state.session_id,
+        extra={"trace_id": get_trace_id()},
+    )
+
+    return {"completed_steps": state.completed_steps + ["persist_session_results"]}
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Action Nodes (Spec 7.6)
+# ──────────────────────────────────────────────────────────────────────
+
+RESOLVE_SCOPE_PROMPT = """You are a scope resolver for a job-matching assistant. The user wants to send emails about matched results.
+
+Current active results:
+{results_list}
+
+User message: {message}
+
+Determine which results the user wants to email. Return ONLY a JSON object:
+{{"target_ids": ["<entity_id>"] or "all", "message_summary": "<brief summary of what email to send>"}}"""
+
+
+async def resolve_scope_node(state: ActionState) -> dict:
+    """Resolve which session results to include in the email action (Spec 7.6 step 1).
+
+    Determines whether to email all active results or a subset.
+
+    Args:
+        state: Current action state with message and session_results.
+
+    Returns:
+        State update dict with updated session_results (scoped).
+    """
+    if state.error or not state.session_results:
+        return {"error": "No active results to act on"}
+
+    results_list = "\n".join(
+        f"[{i+1}] ID: {r.entity_id}, Score: {r.score}, Recipient: {r.recipient or 'N/A'}"
+        for i, r in enumerate(state.session_results)
+    )
+
+    prompt = RESOLVE_SCOPE_PROMPT.format(
+        results_list=results_list,
+        message=state.message,
+    )
+    messages = [
+        {"role": "system", "content": "Return only a JSON object with target IDs and summary."},
+        {"role": "user", "content": prompt},
+    ]
+
+    try:
+        response = await llm_completion(messages=messages, temperature=0.0)
+        content = response.choices[0].message.content
+        cleaned = content.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        elif cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        parsed = json.loads(cleaned)
+        target_ids = parsed.get("target_ids", "all")
+    except Exception as exc:
+        logger.warning(
+            "resolve_scope_node: LLM resolution failed, defaulting to all: %s",
+            exc,
+            extra={"trace_id": get_trace_id()},
+        )
+        target_ids = "all"
+
+    if target_ids != "all":
+        filtered = [r for r in state.session_results if r.entity_id in target_ids]
+        if not filtered:
+            filtered = state.session_results
+    else:
+        filtered = state.session_results
+
+    logger.info(
+        "resolve_scope_node: %d results in scope",
+        len(filtered),
+        extra={"trace_id": get_trace_id()},
+    )
+
+    return {
+        "session_results": filtered,
+        "completed_steps": state.completed_steps + ["resolve_scope"],
+    }
+
+
+async def send_email_node(state: ActionState) -> dict:
+    """Send emails to scoped session results (Spec 7.6 step 2).
+
+    Sends an email to each result's recipient with their match details.
+    Respects EMAIL_MODE (dry_run vs live).
+
+    Args:
+        state: Current action state with scoped session_results.
+
+    Returns:
+        State update dict with email_logs.
+    """
+    if state.error or not state.session_results:
+        return {}
+
+    email_logs = []
+    for result in state.session_results:
+        if not result.recipient:
+            continue
+
+        subject = "Your matching job opportunities" if state.mode == "candidate" else "Matched candidates for your position"
+        body = (
+            f"Score: {result.score}/100\n"
+            f"Highlights: {', '.join(result.highlights[:3])}\n"
+            f"Matched Skills: {', '.join(result.matched_skills[:3])}\n\n"
+            f"Best regards,\nTalentMatch AI"
+        )
+
+        log = await send_notification(
+            recipient=result.recipient,
+            subject=subject,
+            body=body,
+        )
+        email_logs.append(log)
+
+    logger.info(
+        "send_email_node: %d emails sent/logged",
+        len(email_logs),
+        extra={"trace_id": get_trace_id()},
+    )
+
+    return {
+        "email_logs": email_logs,
+        "completed_steps": state.completed_steps + ["send_email"],
+    }
+
+
+async def log_email_results_node(state: ActionState) -> dict:
+    """Log email results to session messages (Spec 7.6 step 3).
+
+    Records the email action in the session's conversation history.
+
+    Args:
+        state: Current action state with email_logs.
+
+    Returns:
+        State update dict with completed_steps.
+    """
+    if state.error or not state.email_logs:
+        return {}
+
+    summary = (
+        f"Sent {len(state.email_logs)} email(s): "
+        + ", ".join(log.recipient for log in state.email_logs[:5])
+    )
+
+    msg = SessionMessage(
+        session_id=state.session_id,
+        role="assistant",
+        content=summary,
+    )
+    await msg.insert()
+
+    logger.info(
+        "log_email_results_node: logged %d emails for session %s",
+        len(state.email_logs),
+        state.session_id,
+        extra={"trace_id": get_trace_id()},
+    )
+
+    return {"completed_steps": state.completed_steps + ["log_email_results"]}

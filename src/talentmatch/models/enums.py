@@ -28,3 +28,20 @@ class MatchDirection(StrEnum):
     resume_to_jd = "resume_to_jd"
     keyword_to_candidate = "keyword_to_candidate"
     keyword_to_jd = "keyword_to_jd"
+
+
+class IntentType(StrEnum):
+    new_search = "new_search"
+    refinement = "refinement"
+    action = "action"
+    follow_on = "follow_on"
+
+
+class SessionMode(StrEnum):
+    recruiter = "recruiter"
+    candidate = "candidate"
+
+
+class ResultStatus(StrEnum):
+    active = "active"
+    removed = "removed"

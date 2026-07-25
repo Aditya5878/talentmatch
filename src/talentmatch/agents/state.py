@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from talentmatch.models.enums import MatchDirection
+from talentmatch.models.enums import IntentType, MatchDirection
 
 
 class MatchResult(BaseModel):
@@ -114,3 +114,86 @@ class FreeTextSearchState(BaseGraphState):
     """
 
     pass
+
+
+class RefinementResult(BaseModel):
+    """A single result entry from the session's active result set."""
+
+    result_id: str
+    entity_id: str
+    entity_type: str = "candidate"
+    score: float = 0
+    rationale: str = ""
+    highlights: list[str] = Field(default_factory=list)
+    matched_skills: list[str] = Field(default_factory=list)
+    missing_skills: list[str] = Field(default_factory=list)
+    status: str = "active"
+
+
+class RefinementState(BaseModel):
+    """State for the refinement graph (Spec 7.5).
+
+    Flow: resolve_reference → apply_refinement → persist_session_results
+
+    Operates on the session's active result set — no retrieval call needed.
+    """
+
+    session_id: str = ""
+    message: str = ""
+    intent: IntentType = IntentType.refinement
+    session_results: list[RefinementResult] = Field(default_factory=list)
+    resolved_targets: list[str] = Field(default_factory=list)
+    refinement_action: str = ""
+    error: str | None = None
+    completed_steps: list[str] = Field(default_factory=list)
+
+
+class ActionResult(BaseModel):
+    """A single result entry targeted for action (email)."""
+
+    result_id: str
+    entity_id: str
+    entity_type: str = "candidate"
+    recipient: str = ""
+    score: float = 0
+
+
+class ActionState(BaseModel):
+    """State for the action graph (Spec 7.6).
+
+    Flow: resolve_scope → send_email → log_email_results
+
+    Operates on the session's active result set — sends emails to
+    matched candidates (or to the candidate about matched JDs).
+    """
+
+    session_id: str = ""
+    message: str = ""
+    intent: IntentType = IntentType.action
+    mode: str = "recruiter"
+    session_results: list[ActionResult] = Field(default_factory=list)
+    email_logs: list[EmailLogEntry] = Field(default_factory=list)
+    error: str | None = None
+    completed_steps: list[str] = Field(default_factory=list)
+
+
+class ChatState(BaseModel):
+    """State for the intent router graph (Spec 7.0).
+
+    The intent router classifies the user's message and dispatches to
+    the appropriate sub-graph (matching, refinement, action, or follow-on).
+    """
+
+    session_id: str = ""
+    message: str = ""
+    mode: str = "recruiter"
+    intent: IntentType = IntentType.new_search
+    entity_text: str | None = None
+    top_k: int = 5
+    notify: bool = False
+    match_results: list[MatchResult] = Field(default_factory=list)
+    refinement_results: list[RefinementResult] = Field(default_factory=list)
+    email_logs: list[EmailLogEntry] = Field(default_factory=list)
+    gap_suggestions: list[dict] = Field(default_factory=list)
+    error: str | None = None
+    completed_steps: list[str] = Field(default_factory=list)

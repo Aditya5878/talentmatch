@@ -9,6 +9,9 @@ from talentmatch.models import (
     EmbeddingIndex,
     JD,
     Match,
+    Session,
+    SessionMessage,
+    SessionResult,
 )
 
 
@@ -32,5 +35,8 @@ async def init_mongodb() -> None:
             EmbeddingIndex,
             Match,
             EmailLog,
+            Session,
+            SessionMessage,
+            SessionResult,
         ],
     )
