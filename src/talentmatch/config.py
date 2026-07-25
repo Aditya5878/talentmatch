@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
+    email_mode: str = "dry_run"
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

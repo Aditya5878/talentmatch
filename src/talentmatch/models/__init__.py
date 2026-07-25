@@ -1,5 +1,6 @@
 from talentmatch.models.batch_job import BatchItem, BatchJob
 from talentmatch.models.candidate import Candidate
+from talentmatch.models.email_log import EmailLog
 from talentmatch.models.embedding import EmbeddingIndex
 from talentmatch.models.enums import (
     BatchStatus,
@@ -15,6 +16,7 @@ __all__ = [
     "BatchJob",
     "BatchStatus",
     "Candidate",
+    "EmailLog",
     "EmbeddingIndex",
     "EntityType",
     "ItemStatus",
