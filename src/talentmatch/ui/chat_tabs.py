@@ -1,74 +1,72 @@
 """Recruiter (Case A) and Candidate (Case B) chat tabs for the Gradio UI.
 
-Builds reusable chat-based matching interfaces that call the
-FastAPI backend's /chat/recruiter and /chat/candidate endpoints.
+ChatGPT-style interfaces: single chatbot + file attach + text input.
+All results shown as Markdown tables inline in chat messages.
 """
 
-import asyncio
 import os
+import tempfile
 
 import httpx
 import gradio as gr
 
+from talentmatch.ingestion.extractor import extract_text
+
 API_BASE = os.getenv("API_BASE", "http://localhost:8000")
 
 
-async def _send_chat_message(message: str, session_id: str | None, mode: str) -> dict:
-    """Send a message to the chat endpoint and return the response.
+# ──────────────────────────────────────────────────────────────────
+# API helper
+# ──────────────────────────────────────────────────────────────────
 
-    Args:
-        message: The user's message.
-        session_id: Optional session ID for follow-up messages.
-        mode: "recruiter" or "candidate".
-
-    Returns:
-        Response dict from the API.
-    """
+async def _send_chat(message: str, session_id: str | None, mode: str) -> dict:
+    """Send a message to the chat endpoint."""
     async with httpx.AsyncClient(timeout=120) as client:
         payload = {"message": message, "top_k": 5}
         if session_id:
             payload["session_id"] = session_id
-
         resp = await client.post(f"{API_BASE}/chat/{mode}", json=payload)
         if resp.status_code == 200:
             return resp.json()
-        return {"error": f"API error: {resp.status.status_code}"}
+        return {"error": f"API error: {resp.status_code}"}
 
 
-def _format_results_table(matches: list[dict]) -> list[list]:
-    """Format match results into rows for a Gradio Dataframe.
+# ──────────────────────────────────────────────────────────────────
+# Markdown formatters
+# ──────────────────────────────────────────────────────────────────
 
-    Args:
-        matches: List of match result dicts.
+def _format_matches(matches: list[dict], entity_label: str) -> str:
+    """Format match results as a Markdown table with suggested follow-ups."""
+    if not matches:
+        return "_No results found._"
 
-    Returns:
-        List of rows: [score, entity_id, highlights, matched_skills, missing_skills]
-    """
-    rows = []
-    for m in matches:
-        rows.append([
-            f"{m.get('score', 0):.0f}/100",
-            m.get("entity_id", "?")[:8] + "...",
-            ", ".join(m.get("highlights", [])[:3]),
-            ", ".join(m.get("matched_skills", [])[:4]),
-            ", ".join(m.get("missing_skills", [])[:4]),
-        ])
-    return rows
+    lines = [
+        f"Found **{len(matches)}** {entity_label}:\n",
+        "| # | Score | Highlights | Matched Skills | Missing Skills |",
+        "|---|-------|-----------|----------------|----------------|",
+    ]
+
+    for i, m in enumerate(matches, 1):
+        score = f"{m.get('score', 0):.0f}/100"
+        highlights = ", ".join(m.get("highlights", [])[:3]) or "—"
+        matched = ", ".join(m.get("matched_skills", [])[:4]) or "—"
+        missing = ", ".join(m.get("missing_skills", [])[:4]) or "—"
+        lines.append(f"| {i} | **{score}** | {highlights} | {matched} | {missing} |")
+
+    lines.append("")
+    lines.append("**You can:**")
+    lines.append(f"- \"Remove {entity_label.split()[0]} #2\"")
+    lines.append(f"- \"Email the remaining {entity_label.split()[0]}s\"")
+
+    return "\n".join(lines)
 
 
 def _format_gap_suggestions(suggestions: list[dict]) -> str:
-    """Format gap suggestions into readable Markdown.
-
-    Args:
-        suggestions: List of gap suggestion dicts.
-
-    Returns:
-        Markdown string with suggestions per JD.
-    """
+    """Format gap suggestions as Markdown."""
     if not suggestions:
         return ""
 
-    lines = ["### Resume Improvement Suggestions\n"]
+    lines = ["\n---\n**Resume Improvement Suggestions:**\n"]
     for s in suggestions:
         title = s.get("jd_title", "Matched Job")
         company = s.get("jd_company", "")
@@ -82,244 +80,152 @@ def _format_gap_suggestions(suggestions: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def build_recruiter_tab() -> None:
-    """Build the Recruiter (Case A) chat tab.
+def _format_response(result: dict, mode: str) -> str:
+    """Convert an API response dict into a single Markdown string for the chat."""
+    if "error" in result:
+        return f"**Error:** {result['error']}"
 
-    Features:
-    - Text input for JD paste or free-text query
-    - Chatbot for follow-up conversation
-    - Results dataframe showing matched candidates
-    - Action buttons for emailing candidates
+    matches = result.get("matches", [])
+    summary = result.get("refinement_summary", "")
+    email_logs = result.get("email_logs", [])
+    gap_sugs = result.get("gap_suggestions", [])
+    entity_label = "candidates" if mode == "recruiter" else "openings"
+
+    parts = []
+
+    if matches:
+        parts.append(_format_matches(matches, entity_label))
+        if mode == "candidate" and gap_sugs:
+            parts.append(_format_gap_suggestions(gap_sugs))
+
+    elif summary:
+        parts.append(summary)
+
+    elif email_logs:
+        recipients = [e.get("recipient", "?") for e in email_logs[:10]]
+        parts.append(
+            f"**Sent {len(email_logs)} email(s):**\n"
+            + "\n".join(f"- {r}" for r in recipients)
+        )
+
+    else:
+        parts.append("_Done._")
+
+    return "\n\n".join(parts)
+
+
+def _handle_file(uploaded_file, mode: str) -> str:
+    """Extract text from an uploaded file and return a labeled prefix."""
+    if uploaded_file is None:
+        return ""
+
+    try:
+        file_path = uploaded_file if isinstance(uploaded_file, str) else uploaded_file.name
+        text = extract_text(file_path)
+        filename = os.path.basename(file_path)
+        label = "Job Description" if mode == "recruiter" else "Resume"
+        return f"[Attached {label}: {filename}]\n{text}\n\n"
+    except Exception as e:
+        return f"[File attachment failed: {e}]\n\n"
+
+
+# ──────────────────────────────────────────────────────────────────
+# Shared builder
+# ──────────────────────────────────────────────────────────────────
+
+def _build_chat_tab(mode: str) -> None:
+    """Build a ChatGPT-style tab for the given mode (recruiter or candidate).
+
+    Args:
+        mode: "recruiter" or "candidate" — determines endpoint and labels.
     """
-    with gr.Tab("Recruiter (Case A)"):
-        gr.Markdown("## Find Candidates")
-        gr.Markdown("Paste a Job Description or type a skill query (e.g. 'Java developers with Spring Boot')")
+    is_recruiter = mode == "recruiter"
+    title = "Find Candidates" if is_recruiter else "Find Job Openings"
+    placeholder = (
+        "Paste a Job Description, attach a file, or type a skill query..."
+        if is_recruiter
+        else "Paste your resume, attach a file, or type a skill query..."
+    )
+    chat_placeholder = "Type a message..."
+    file_label = "📎 Attach JD" if is_recruiter else "📎 Attach Resume"
+    entity_label = "candidates" if is_recruiter else "matching openings"
 
+    tab_name = "Recruiter" if is_recruiter else "Candidate"
+
+    with gr.Tab(tab_name):
         session_state = gr.State(value=None)
 
-        with gr.Row():
-            query_input = gr.Textbox(
-                label="Job Description or Query",
-                placeholder="Paste your JD or type a search query...",
-                lines=6,
-            )
+        gr.Markdown(f"## 🤖 TalentMatch — {tab_name}")
 
-        search_btn = gr.Button("Search Candidates", variant="primary")
-
-        gr.Markdown("---")
-        gr.Markdown("### Results")
-
-        results_table = gr.Dataframe(
-            headers=["Score", "ID", "Highlights", "Matched Skills", "Missing Skills"],
-            interactive=False,
+        chatbot = gr.Chatbot(
+            value=[
+                {"role": "assistant", "content": (
+                    f"Welcome! I can help you find {entity_label}.\n\n"
+                    f"You can:\n"
+                    f"- Paste a {'Job Description' if is_recruiter else 'resume'} directly\n"
+                    f"- Attach a file using the 📎 button\n"
+                    f"- Type a skill query like \"{'Java developers with Spring Boot' if is_recruiter else 'Python backend openings'}\""
+                )},
+            ],
+            height=520,
         )
 
-        chatbot = gr.Chatbot(label="Follow-up Conversation", height=300)
-
         with gr.Row():
-            chat_input = gr.Textbox(
-                label="Follow-up message",
-                placeholder="e.g. 'Remove candidate 2', 'Email the remaining candidates'",
-                scale=4,
+            file_upload = gr.UploadButton(
+                label=file_label,
+                file_types=[".pdf", ".docx", ".txt"],
+                scale=0,
             )
-            send_btn = gr.Button("Send", scale=1)
+            msg_input = gr.Textbox(
+                placeholder=chat_placeholder,
+                show_label=False,
+                scale=5,
+                container=False,
+            )
+            send_btn = gr.Button("➤", scale=0, min_width=60)
 
-        with gr.Row():
-            email_all_btn = gr.Button("Email All Active Candidates")
-            email_status = gr.Markdown("")
+        # ── handlers ───────────────────────────────────────────
 
-        async def do_search(query, history):
-            if not query.strip():
-                return history, gr.Dataframe(value=[]), None, ""
+        async def on_send(message, file, history, sid):
+            if not message or not message.strip():
+                return history, sid, None, ""
 
-            result = await _send_chat_message(query, None, "recruiter")
-            if "error" in result:
-                return history + [(query, f"Error: {result['error']}")], gr.Dataframe(value=[]), None, ""
+            file_prefix = _handle_file(file, mode)
+            full_message = file_prefix + message
 
-            session_id = result.get("session_id")
-            matches = result.get("matches", [])
-            rows = _format_results_table(matches)
-            steps = ", ".join(result.get("graph_steps", []))
+            result = await _send_chat(full_message, sid, mode)
+            response_md = _format_response(result, mode)
+            new_sid = result.get("session_id", sid)
 
-            history = history + [
-                (query, f"Found {len(matches)} candidates. Graph steps: {steps}")
+            new_history = history + [
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": response_md},
             ]
 
-            return history, gr.Dataframe(value=rows), session_id, ""
-
-        async def do_chat(message, history, sid):
-            if not message.strip():
-                return history, sid, gr.Dataframe(value=[]), ""
-
-            result = await _send_chat_message(message, sid, "recruiter")
-            if "error" in result:
-                return history + [(message, f"Error: {result['error']}")], sid, gr.Dataframe(value=[]), ""
-
-            new_sid = result.get("session_id", sid)
-            matches = result.get("matches", [])
-            summary = result.get("refinement_summary", "")
-            email_logs = result.get("email_logs", [])
-
-            if matches:
-                rows = _format_results_table(matches)
-                response = f"Updated results: {len(matches)} candidates."
-            elif summary:
-                rows = gr.Dataframe.value
-                response = summary
-            elif email_logs:
-                rows = gr.Dataframe.value
-                response = f"Sent {len(email_logs)} email(s)."
-            else:
-                rows = gr.Dataframe.value
-                response = "Done."
-
-            return history + [(message, response)], new_sid, gr.Dataframe(value=rows), ""
-
-        async def do_email_all(sid):
-            if not sid:
-                return "No active session. Search first."
-
-            result = await _send_chat_message("Email all active candidates", sid, "recruiter")
-            if "error" in result:
-                return f"Error: {result['error']}"
-
-            email_logs = result.get("email_logs", [])
-            return f"Sent {len(email_logs)} email(s)."
-
-        search_btn.click(
-            fn=do_search,
-            inputs=[query_input, chatbot],
-            outputs=[chatbot, results_table, session_state, chat_input],
-        )
+            return new_history, new_sid, None, ""
 
         send_btn.click(
-            fn=do_chat,
-            inputs=[chat_input, chatbot, session_state],
-            outputs=[chatbot, session_state, results_table, chat_input],
+            fn=on_send,
+            inputs=[msg_input, file_upload, chatbot, session_state],
+            outputs=[chatbot, session_state, file_upload, msg_input],
         )
 
-        chat_input.submit(
-            fn=do_chat,
-            inputs=[chat_input, chatbot, session_state],
-            outputs=[chatbot, session_state, results_table, chat_input],
+        msg_input.submit(
+            fn=on_send,
+            inputs=[msg_input, file_upload, chatbot, session_state],
+            outputs=[chatbot, session_state, file_upload, msg_input],
         )
 
-        email_all_btn.click(
-            fn=do_email_all,
-            inputs=[session_state],
-            outputs=[email_status],
-        )
+
+# ──────────────────────────────────────────────────────────────────
+# Public builders (called from app.py)
+# ──────────────────────────────────────────────────────────────────
+
+def build_recruiter_tab() -> None:
+    """Build the Recruiter (Case A) chat tab."""
+    _build_chat_tab("recruiter")
 
 
 def build_candidate_tab() -> None:
-    """Build the Candidate (Case B) chat tab.
-
-    Features:
-    - Text input for resume paste or free-text query
-    - Chatbot for follow-up conversation
-    - Results dataframe showing matched JDs
-    - Gap suggestions panel
-    """
-    with gr.Tab("Candidate (Case B)"):
-        gr.Markdown("## Find Job Openings")
-        gr.Markdown("Paste your resume or type a skill query (e.g. 'Python backend openings')")
-
-        session_state = gr.State(value=None)
-
-        with gr.Row():
-            query_input = gr.Textbox(
-                label="Resume or Query",
-                placeholder="Paste your resume or type a search query...",
-                lines=6,
-            )
-
-        search_btn = gr.Button("Search Openings", variant="primary")
-
-        gr.Markdown("---")
-        gr.Markdown("### Results")
-
-        results_table = gr.Dataframe(
-            headers=["Score", "JD ID", "Highlights", "Matched Skills", "Missing Skills"],
-            interactive=False,
-        )
-
-        gap_suggestions_display = gr.Markdown("")
-
-        chatbot = gr.Chatbot(label="Follow-up Conversation", height=300)
-
-        with gr.Row():
-            chat_input = gr.Textbox(
-                label="Follow-up message",
-                placeholder="e.g. 'Remove job 2', 'Email me these openings'",
-                scale=4,
-            )
-            send_btn = gr.Button("Send", scale=1)
-
-        async def do_search(query, history):
-            if not query.strip():
-                return history, gr.Dataframe(value=[]), None, "", ""
-
-            result = await _send_chat_message(query, None, "candidate")
-            if "error" in result:
-                return history + [(query, f"Error: {result['error']}")], gr.Dataframe(value=[]), None, "", ""
-
-            session_id = result.get("session_id")
-            matches = result.get("matches", [])
-            rows = _format_results_table(matches)
-            gap_sugs = result.get("gap_suggestions", [])
-            gap_md = _format_gap_suggestions(gap_sugs)
-            steps = ", ".join(result.get("graph_steps", []))
-
-            history = history + [
-                (query, f"Found {len(matches)} matching openings. Graph steps: {steps}")
-            ]
-
-            return history, gr.Dataframe(value=rows), session_id, gap_md, ""
-
-        async def do_chat(message, history, sid):
-            if not message.strip():
-                return history, sid, gr.Dataframe(value=[]), "", ""
-
-            result = await _send_chat_message(message, sid, "candidate")
-            if "error" in result:
-                return history + [(message, f"Error: {result['error']}")], sid, gr.Dataframe(value=[]), "", ""
-
-            new_sid = result.get("session_id", sid)
-            matches = result.get("matches", [])
-            summary = result.get("refinement_summary", "")
-            email_logs = result.get("email_logs", [])
-            gap_sugs = result.get("gap_suggestions", [])
-            gap_md = _format_gap_suggestions(gap_sugs)
-
-            if matches:
-                rows = _format_results_table(matches)
-                response = f"Updated results: {len(matches)} openings."
-            elif summary:
-                rows = gr.Dataframe.value
-                response = summary
-            elif email_logs:
-                rows = gr.Dataframe.value
-                response = f"Sent {len(email_logs)} email(s)."
-            else:
-                rows = gr.Dataframe.value
-                response = "Done."
-
-            return history + [(message, response)], new_sid, gr.Dataframe(value=rows), gap_md, ""
-
-        search_btn.click(
-            fn=do_search,
-            inputs=[query_input, chatbot],
-            outputs=[chatbot, results_table, session_state, gap_suggestions_display, chat_input],
-        )
-
-        send_btn.click(
-            fn=do_chat,
-            inputs=[chat_input, chatbot, session_state],
-            outputs=[chatbot, session_state, results_table, gap_suggestions_display, chat_input],
-        )
-
-        chat_input.submit(
-            fn=do_chat,
-            inputs=[chat_input, chatbot, session_state],
-            outputs=[chatbot, session_state, results_table, gap_suggestions_display, chat_input],
-        )
+    """Build the Candidate (Case B) chat tab."""
+    _build_chat_tab("candidate")
