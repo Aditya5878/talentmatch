@@ -255,7 +255,7 @@ async def chat_recruiter(req: ChatRequest):
         raise HTTPException(status_code=400, detail="message cannot be empty")
 
     session = await _get_or_create_session(req.session_id, SessionMode.recruiter)
-    await _save_user_message(session.id, req.message)
+    await _save_user_message(str(session.id), req.message)
 
     # Step 1: Classify intent
     router_state = ChatState(
@@ -282,7 +282,7 @@ async def chat_recruiter(req: ChatRequest):
     logger.info(
         "chat_recruiter: intent=%s, session=%s",
         intent.value,
-        session.id,
+        str(session.id),
         extra={"trace_id": get_trace_id()},
     )
 
@@ -318,7 +318,7 @@ async def chat_candidate(req: ChatRequest):
         raise HTTPException(status_code=400, detail="message cannot be empty")
 
     session = await _get_or_create_session(req.session_id, SessionMode.candidate)
-    await _save_user_message(session.id, req.message)
+    await _save_user_message(str(session.id), req.message)
 
     # Step 1: Classify intent
     router_state = ChatState(
@@ -345,7 +345,7 @@ async def chat_candidate(req: ChatRequest):
     logger.info(
         "chat_candidate: intent=%s, session=%s",
         intent.value,
-        session.id,
+        str(session.id),
         extra={"trace_id": get_trace_id()},
     )
 
