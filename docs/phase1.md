@@ -161,13 +161,15 @@ File Upload → Extract Text → LLM Parse → Chunk by Section → Embed → Bu
 ### Chunking Strategy
 **Resumes:**
 - `skills` → single chunk with all skills
-- `experience` → one chunk per job (title + company + description)
+- `experience` → one chunk per job: `"Title at Company: Description"` (each entry = 1 chunk)
 - `education` → one chunk per degree
 
 **JDs:**
 - `required_skills` → single chunk
 - `nice_to_have` → single chunk
-- `responsibilities` → one chunk per responsibility
+- `responsibilities` → one chunk per responsibility (each entry = 1 chunk)
+
+**Important**: During **ingestion**, each section creates one chunk. During **retrieval**, only the relevant field is used as the query (e.g., `description` only for experience, not `title+company`). This means the stored chunk and the query text are slightly different — the stored chunk is richer (includes title/company), while the query focuses on the semantic content.
 
 ---
 
@@ -191,10 +193,12 @@ Resume parsed by LLM:
 | Query # | Source | Embedding Input | Top-K |
 |----------|--------|----------------|-------|
 | 1 | skills | "Python, Django, PostgreSQL" | 10 |
-| 2 | experience[0] | "Built REST APIs at TCS" | 10 |
-| 3 | experience[1] | "Migrated to microservices at Infosys" | 10 |
+| 2 | experience[0].description | "Built REST APIs at TCS" | 10 |
+| 3 | experience[1].description | "Migrated to microservices at Infosys" | 10 |
 
 Each query embeds independently and searches the **JD collection** in Qdrant.
+
+**Note**: During ingestion, `experience[0]` was stored as `"Backend Developer at TCS: Built REST APIs at TCS"` (title+company+description). But during retrieval, only `"Built REST APIs at TCS"` (description only) is used as the query. The stored chunk is richer than the query.
 
 **Step 3: Aggregate results using max-pooling per JD**
 
@@ -238,11 +242,13 @@ JD parsed by LLM:
 | Query # | Source | Embedding Input | Top-K |
 |----------|--------|----------------|-------|
 | 1 | required_skills | "Python, Django, PostgreSQL, Redis" | 10 |
-| 2 | responsibilities[0] | "Design and maintain REST APIs..." | 10 |
-| 3 | responsibilities[1] | "Optimize PostgreSQL queries..." | 10 |
-| 4 | responsibilities[2] | "Lead code reviews and mentor..." | 10 |
+| 2 | responsibilities[0] | "Design and maintain REST APIs serving 1M+ daily users" | 10 |
+| 3 | responsibilities[1] | "Optimize PostgreSQL queries for high-throughput" | 10 |
+| 4 | responsibilities[2] | "Lead code reviews and mentor junior developers" | 10 |
 
 Each query searches the **candidate collection** in Qdrant.
+
+**Note**: During ingestion, each responsibility was stored as a separate chunk (same text). During retrieval, the same text is used as the query — in this case stored chunk and query text match exactly for responsibilities.
 
 **Step 3: Aggregate results using max-pooling per candidate**
 
