@@ -5,10 +5,7 @@ No side effects in the function body — all persistence happens through
 the state object, which LangGraph handles via its checkpointer.
 """
 
-import json
 import logging
-
-from bson import ObjectId
 
 from talentmatch.agents.state import (
     BaseGraphState,
@@ -67,6 +64,7 @@ async def parse_jd_node(state: JDToCandidatesState) -> dict:
         "raw_text": raw_text,
         "skills_text": skills,
         "experience_texts": responsibilities,
+        "completed_steps": state.completed_steps + ["parse_jd"],
     }
 
 
@@ -113,6 +111,7 @@ async def parse_resume_node(state: ResumeToJDsState) -> dict:
         "raw_text": raw_text,
         "skills_text": skills,
         "experience_texts": experience_texts,
+        "completed_steps": state.completed_steps + ["parse_resume"],
     }
 
 
@@ -142,7 +141,7 @@ async def retrieve_candidates_node(state: JDToCandidatesState) -> dict:
         extra={"trace_id": get_trace_id()},
     )
 
-    return {"retrieved_entities": results}
+    return {"retrieved_entities": results, "completed_steps": state.completed_steps + ["retrieve_candidates"]}
 
 
 async def retrieve_jds_node(state: ResumeToJDsState) -> dict:
@@ -171,7 +170,7 @@ async def retrieve_jds_node(state: ResumeToJDsState) -> dict:
         extra={"trace_id": get_trace_id()},
     )
 
-    return {"retrieved_entities": results}
+    return {"retrieved_entities": results, "completed_steps": state.completed_steps + ["retrieve_jds"]}
 
 
 async def rerank_score_node(state: BaseGraphState) -> dict:
@@ -209,7 +208,7 @@ async def rerank_score_node(state: BaseGraphState) -> dict:
         extra={"trace_id": get_trace_id()},
     )
 
-    return {"reranked_results": match_results}
+    return {"reranked_results": match_results, "completed_steps": state.completed_steps + ["rerank_score"]}
 
 
 async def persist_matches_node(state: BaseGraphState) -> dict:
@@ -268,7 +267,7 @@ async def persist_matches_node(state: BaseGraphState) -> dict:
         extra={"trace_id": get_trace_id()},
     )
 
-    return {"persisted_match_ids": match_ids}
+    return {"persisted_match_ids": match_ids, "completed_steps": state.completed_steps + ["persist_matches"]}
 
 
 async def notify_candidates_node(state: JDToCandidatesState) -> dict:
@@ -314,7 +313,7 @@ async def notify_candidates_node(state: JDToCandidatesState) -> dict:
         extra={"trace_id": get_trace_id()},
     )
 
-    return {"email_logs": email_logs}
+    return {"email_logs": email_logs, "completed_steps": state.completed_steps + ["notify_candidates"]}
 
 
 async def notify_candidate_node(state: ResumeToJDsState) -> dict:
@@ -363,4 +362,4 @@ async def notify_candidate_node(state: ResumeToJDsState) -> dict:
         extra={"trace_id": get_trace_id()},
     )
 
-    return {"email_logs": [log]}
+    return {"email_logs": [log], "completed_steps": state.completed_steps + ["notify_candidate"]}

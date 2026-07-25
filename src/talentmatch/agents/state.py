@@ -68,6 +68,9 @@ class BaseGraphState(BaseModel):
     # Error tracking
     error: str | None = None
 
+    # Graph execution tracking
+    completed_steps: list[str] = Field(default_factory=list)
+
 
 class JDToCandidatesState(BaseGraphState):
     """State for the JD→Candidates graph (Case A).

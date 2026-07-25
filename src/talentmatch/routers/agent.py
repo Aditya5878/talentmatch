@@ -94,13 +94,7 @@ async def agent_jd_to_candidates(req: AgentMatchRequest):
     return AgentMatchResponse(
         matches=matches,
         email_logs=email_logs,
-        graph_steps=[
-            "parse_jd",
-            "retrieve_candidates",
-            "rerank_score",
-            "persist_matches",
-            "notify_candidates" if req.notify else None,
-        ],
+        graph_steps=state.completed_steps,
     )
 
 
@@ -152,11 +146,5 @@ async def agent_resume_to_jds(req: AgentMatchRequest):
     return AgentMatchResponse(
         matches=matches,
         email_logs=email_logs,
-        graph_steps=[
-            "parse_resume",
-            "retrieve_jds",
-            "rerank_score",
-            "persist_matches",
-            "notify_candidate",
-        ],
+        graph_steps=state.completed_steps,
     )
