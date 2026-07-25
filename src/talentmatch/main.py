@@ -9,7 +9,7 @@ from talentmatch.config import settings
 from talentmatch.db.mongo import init_mongodb
 from talentmatch.db.qdrant import ensure_collections, get_qdrant_client
 from talentmatch.models import Candidate, JD
-from talentmatch.routers import health, ingestion, matching, search
+from talentmatch.routers import agent, health, ingestion, matching, search
 from talentmatch.utils.logging import TraceIDMiddleware, setup_logging
 
 logger = logging.getLogger("talentmatch")
@@ -77,6 +77,7 @@ app.include_router(health.router)
 app.include_router(ingestion.router)
 app.include_router(matching.router)
 app.include_router(search.router)
+app.include_router(agent.router)
 
 
 @app.get("/candidates")

@@ -5,6 +5,7 @@ from talentmatch.config import settings
 from talentmatch.models import (
     BatchJob,
     Candidate,
+    EmailLog,
     EmbeddingIndex,
     JD,
     Match,
@@ -16,7 +17,7 @@ async def init_mongodb() -> None:
 
     Creates an AsyncIOMotorClient using the configured URI and initializes
     Beanie ODM with all document models (Candidate, JD, BatchJob,
-    EmbeddingIndex, Match).
+    EmbeddingIndex, Match, EmailLog).
 
     Raises:
         Exception: If MongoDB connection fails after retries in the caller.
@@ -30,5 +31,6 @@ async def init_mongodb() -> None:
             BatchJob,
             EmbeddingIndex,
             Match,
+            EmailLog,
         ],
     )
