@@ -171,6 +171,106 @@ File Upload → Extract Text → LLM Parse → Chunk by Section → Embed → Bu
 
 ---
 
+## Multi-Section Retrieval Pattern
+
+The matching system uses a **multi-query retrieval** strategy: structured fields from a parsed document are used as separate search queries against the opposing collection. This ensures strong matches on any single section boost the entity's overall ranking.
+
+### Resume → JD Matching
+
+**Step 1: Extract search queries from the parsed resume**
+
+```
+Resume parsed by LLM:
+  skills: ["Python", "Django", "PostgreSQL"]
+  experience[0].description: "Built REST APIs at TCS"
+  experience[1].description: "Migrated to microservices at Infosys"
+```
+
+**Step 2: Each field becomes a separate Qdrant search**
+
+| Query # | Source | Embedding Input | Top-K |
+|----------|--------|----------------|-------|
+| 1 | skills | "Python, Django, PostgreSQL" | 10 |
+| 2 | experience[0] | "Built REST APIs at TCS" | 10 |
+| 3 | experience[1] | "Migrated to microservices at Infosys" | 10 |
+
+Each query embeds independently and searches the **JD collection** in Qdrant.
+
+**Step 3: Aggregate results using max-pooling per JD**
+
+```
+Query 1 (skills) returns:
+  JD-A required_skills chunk:  0.91
+  JD-B required_skills chunk:  0.72
+
+Query 2 (experience 1) returns:
+  JD-A responsibilities chunk: 0.88
+  JD-C responsibilities chunk: 0.80
+
+Query 3 (experience 2) returns:
+  JD-A responsibilities chunk: 0.85
+  JD-B responsibilities chunk: 0.79
+
+Aggregated (max per JD):
+  JD-A: max(0.91, 0.88, 0.85) = 0.91
+  JD-B: max(0.72, 0.79)       = 0.79
+  JD-C: max(0.80)              = 0.80
+```
+
+**Step 4: LLM reranks top results**
+
+The full resume text + top aggregated JD results are sent to the LLM for scoring, rationale generation, and matched/missing skills analysis. Top 5 returned.
+
+### JD → Candidate Matching
+
+**Step 1: Extract search queries from the parsed JD**
+
+```
+JD parsed by LLM:
+  required_skills: ["Python", "Django", "PostgreSQL", "Redis"]
+  responsibilities[0]: "Design and maintain REST APIs serving 1M+ daily users"
+  responsibilities[1]: "Optimize PostgreSQL queries for high-throughput"
+  responsibilities[2]: "Lead code reviews and mentor junior developers"
+```
+
+**Step 2: Each field becomes a separate Qdrant search**
+
+| Query # | Source | Embedding Input | Top-K |
+|----------|--------|----------------|-------|
+| 1 | required_skills | "Python, Django, PostgreSQL, Redis" | 10 |
+| 2 | responsibilities[0] | "Design and maintain REST APIs..." | 10 |
+| 3 | responsibilities[1] | "Optimize PostgreSQL queries..." | 10 |
+| 4 | responsibilities[2] | "Lead code reviews and mentor..." | 10 |
+
+Each query searches the **candidate collection** in Qdrant.
+
+**Step 3: Aggregate results using max-pooling per candidate**
+
+```
+Aggregated (max per candidate):
+  Candidate-A: max(0.91, 0.85, 0.88, 0.82) = 0.91
+  Candidate-B: max(0.72, 0.68)              = 0.72
+  Candidate-C: max(0.80)                     = 0.80
+```
+
+**Step 4: LLM reranks top results**
+
+The full JD text + top aggregated candidate results are sent to the LLM. Top 5 returned.
+
+### Why Multi-Query Retrieval?
+
+- **Chunking** creates storage units (semantic sections for embeddings)
+- **Retrieval** uses structured fields as separate queries (not chunks as queries)
+- A strong match on **any single section** (e.g., skills match) boosts the entity's ranking via max-pooling
+- Avoids losing granularity: searching "Python, Django" as one query is more precise than embedding the entire resume as one blob
+
+### Implementation Reference
+- Query extraction: `matching.py:69-72` (JD→Candidate), `matching.py:131-138` (Resume→JD)
+- Multi-query search: `retriever.py:_retrieve()` (lines 87-117)
+- Score aggregation: `retriever.py:_retrieve()` max-pooling (lines 109-117)
+
+---
+
 ## Matching Core
 
 ### Retrieve-then-Rerank Pattern
